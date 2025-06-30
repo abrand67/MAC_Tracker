@@ -15,75 +15,108 @@ limitations under the License.
 """
 
 import os
-import psycopg2
 from dotenv import load_dotenv
 from tabulate import tabulate
 import argparse
+from datetime import datetime
+from db_backend import MACStorage
 
 load_dotenv()
 
-DB_CONFIG = {
-    "host": os.getenv("DB_HOST"),
-    "port": os.getenv("DB_PORT"),
-    "dbname": os.getenv("DB_NAME"),
-    "user": os.getenv("DB_USER"),
-    "password": os.getenv("DB_PASSWORD")
-}
-
 def normalize_mac(mac_input):
-    mac = mac_input.lower().replace("-", "").replace(":", "").replace(".", "")
-    return mac
+    return mac_input.lower().replace("-", "").replace(":", "").replace(".", "")
 
-def search_mac(cursor, mac_query, show_history=False):
-    mac_fragment = normalize_mac(mac_query)
+def format_mac(mac):
+    mac = normalize_mac(mac)
+    return ":".join(mac[i:i+2] for i in range(0, len(mac), 2))
 
-    # Match MACs with or without colons
-    cursor.execute("""
-        SELECT mac, device, interface, first_seen, last_seen
-        FROM mac_addresses
-        WHERE REPLACE(REPLACE(REPLACE(mac, ':', ''), '-', ''), '.', '') ILIKE %s
-        ORDER BY last_seen DESC
-    """, (f"%{mac_fragment}%",))
-    
-    results = cursor.fetchall()
+def search_mac_partial(store: MACStorage, mac_fragment: str, show_history: bool):
+    db_backend = os.getenv("DB_BACKEND", "postgres").lower()
+    mac_fragment = normalize_mac(mac_fragment)
 
-    if not results:
-        print("No MAC address found.")
-        return
+    if db_backend == "postgres":
+        import psycopg2
+        conn = store.conn
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT mac, device, interface, first_seen, last_seen
+            FROM mac_addresses
+            WHERE REPLACE(REPLACE(REPLACE(mac, ':', ''), '-', ''), '.', '') ILIKE %s
+            ORDER BY last_seen DESC
+        """, (f"%{mac_fragment}%",))
+        rows = cursor.fetchall()
 
-    headers = ["MAC", "Device", "Interface", "First Seen", "Last Seen"]
-    print("\nCurrent MAC Info:\n")
-    print(tabulate(results, headers=headers))
+        if not rows:
+            print("No MACs found.")
+            return
 
-    if show_history:
-        print("\nMovement History:\n")
-        for row in results:
-            mac = row[0]
-            cursor.execute("""
-                SELECT from_device, from_if, to_device, to_if, moved_at
-                FROM mac_movements
-                WHERE mac = %s
-                ORDER BY moved_at DESC
-            """, (mac,))
-            history = cursor.fetchall()
-            if history:
-                print(f"History for {mac}:\n")
-                print(tabulate(history, headers=["From Device", "From IF", "To Device", "To IF", "Moved At"]))
-                print()
+        print("\nCurrent MAC Info:")
+        print(tabulate(rows, headers=["MAC", "Device", "Interface", "First Seen", "Last Seen"]))
+
+        if show_history:
+            for mac, *_ in rows:
+                cursor.execute("""
+                    SELECT from_device, from_if, to_device, to_if, moved_at
+                    FROM mac_movements
+                    WHERE mac = %s
+                    ORDER BY moved_at DESC
+                """, (mac,))
+                history = cursor.fetchall()
+                if history:
+                    print(f"\nHistory for {mac}:")
+                    print(tabulate(history, headers=["From Device", "From IF", "To Device", "To IF", "Moved At"]))
+
+    elif db_backend == "mongo":
+        macs = store.mac_coll.find({
+            "$expr": {
+                "$regexMatch": {
+                    "input": {"$replaceAll": {"input": "$mac", "find": ":", "replacement": ""}},
+                    "regex": mac_fragment,
+                    "options": "i"
+                }
+            }
+        }).sort("last_seen", -1)
+
+        mac_list = list(macs)
+
+        if not mac_list:
+            print("No MACs found.")
+            return
+
+        print("\nCurrent MAC Info:")
+        table = [
+            [d['mac'], d['device'], d['interface'], d['first_seen'], d['last_seen']]
+            for d in mac_list
+        ]
+        print(tabulate(table, headers=["MAC", "Device", "Interface", "First Seen", "Last Seen"]))
+
+        if show_history:
+            for d in mac_list:
+                mac = d['mac']
+                movements = store.movements.find({"mac": mac}).sort("moved_at", -1)
+                history = [
+                    [m['from_device'], m['from_if'], m['to_device'], m['to_if'], m['moved_at']]
+                    for m in movements
+                ]
+                if history:
+                    print(f"\nHistory for {mac}:")
+                    print(tabulate(history, headers=["From Device", "From IF", "To Device", "To IF", "Moved At"]))
+
+    else:
+        print("Unsupported DB_BACKEND")
 
 def main():
-    parser = argparse.ArgumentParser(description="Lookup MAC address info from PostgreSQL.")
-    parser.add_argument("mac", help="Full or partial MAC address to search")
-    parser.add_argument("--history", action="store_true", help="Show movement history for matching MACs")
+    parser = argparse.ArgumentParser(description="MAC address lookup (PostgreSQL or MongoDB).")
+    parser.add_argument("mac", help="Full or partial MAC address")
+    parser.add_argument("--history", action="store_true", help="Include movement history")
     args = parser.parse_args()
 
-    conn = psycopg2.connect(**DB_CONFIG)
-    cursor = conn.cursor()
-
-    search_mac(cursor, args.mac, args.history)
-
-    cursor.close()
-    conn.close()
+    store = MACStorage()
+    try:
+        search_mac_partial(store, args.mac, args.history)
+    finally:
+        store.close()
 
 if __name__ == "__main__":
     main()
+
