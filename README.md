@@ -1,5 +1,5 @@
 # MAC_Tracker
-Track location of MAC addresses on a network.  This script uses SNMP to discover MAC addresses from inventory in NetBox and stores the MAC location information in a PostgreSQL or MongoDB database.
+Track location of MAC addresses on a network.  This script uses SNMP to discover MAC addresses from inventory in NetBox and stores the MAC location information in a PostgreSQL or MongoDB database.  Credentials and variables are stored in `.env`.
 
 Scheduling:
 The main script can be run from crontab as follows:<br>
