@@ -17,6 +17,9 @@ import os
 import psycopg2
 from pymongo import MongoClient
 from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv()
 
 DB_BACKEND = os.getenv("DB_BACKEND", "postgres")
 
