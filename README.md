@@ -15,7 +15,7 @@ The script also logs to `mac_tracker.log` and the following is an example of the
 2025-06-30 14:00:01,300 - INFO - === MAC Tracker Run Completed ===
 ```
 
-
+<br>
 The support script, `mac_lookup.py`, will let your query the database for a MAC.  Example:<br>
 **Lookup a full MAC:**
 ```
