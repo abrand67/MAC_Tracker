@@ -45,7 +45,7 @@ logger = logging.getLogger("mac_tracker")
 logger.setLevel(logging.INFO)
 
 # File handler (rotate logs)
-log_file = "mac_tracker.log"
+log_file = "/var/log/mac_tracker.log"
 file_handler = RotatingFileHandler(log_file, maxBytes=5 * 1024 * 1024, backupCount=3)
 file_handler.setFormatter(log_formatter)
 logger.addHandler(file_handler)
