@@ -13,15 +13,14 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 """
-
 import os
 import logging
-import psycopg2
 import pynetbox
-from dotenv import load_dotenv
 from datetime import datetime
-from pysnmp.hlapi import *
+from dotenv import load_dotenv
 from logging.handlers import RotatingFileHandler
+from pysnmp.hlapi import *
+from db_backend import MACStorage
 
 # Load environment
 load_dotenv()
@@ -29,28 +28,20 @@ load_dotenv()
 # Configuration
 NETBOX_URL = os.getenv("NETBOX_URL")
 NETBOX_TOKEN = os.getenv("NETBOX_TOKEN")
-SNMP_COMMUNITY = os.getenv("SNMP_COMMUNITY")
+SNMP_COMMUNITY = os.getenv("SNMP_COMMUNITY", "public")
 
-DB_CONFIG = {
-    "host": os.getenv("DB_HOST"),
-    "port": os.getenv("DB_PORT"),
-    "dbname": os.getenv("DB_NAME"),
-    "user": os.getenv("DB_USER"),
-    "password": os.getenv("DB_PASSWORD")
-}
-
-# Setup logging
+# Logging setup
 log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("mac_tracker")
 logger.setLevel(logging.INFO)
 
-# File handler (rotate logs)
-log_file = "/var/log/mac_tracker.log"
+# File log
+log_file = "mac_tracker.log"
 file_handler = RotatingFileHandler(log_file, maxBytes=5 * 1024 * 1024, backupCount=3)
 file_handler.setFormatter(log_formatter)
 logger.addHandler(file_handler)
 
-# Console handler
+# Console log
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(log_formatter)
 logger.addHandler(console_handler)
@@ -111,88 +102,30 @@ def get_mac_table(ip):
 
     return mac_table
 
-def ensure_tables(cursor):
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS mac_addresses (
-        id SERIAL PRIMARY KEY,
-        mac TEXT UNIQUE,
-        device TEXT,
-        interface TEXT,
-        first_seen TIMESTAMP,
-        last_seen TIMESTAMP
-    );
-    """)
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS mac_movements (
-        id SERIAL PRIMARY KEY,
-        mac TEXT,
-        from_device TEXT,
-        from_if TEXT,
-        to_device TEXT,
-        to_if TEXT,
-        moved_at TIMESTAMP
-    );
-    """)
-
-def upsert_mac(cursor, mac, device, interface, now):
-    cursor.execute("SELECT device, interface, first_seen FROM mac_addresses WHERE mac = %s", (mac,))
-    row = cursor.fetchone()
-
-    if row:
-        old_device, old_if, first_seen = row
-        if old_device == device and old_if == interface:
-            cursor.execute("""
-                UPDATE mac_addresses SET last_seen = %s WHERE mac = %s
-            """, (now, mac))
-            logger.info(f"[{device}] MAC {mac} seen again on {interface}")
-        else:
-            # MAC moved
-            cursor.execute("""
-                INSERT INTO mac_movements (mac, from_device, from_if, to_device, to_if, moved_at)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, (mac, old_device, old_if, device, interface, now))
-            cursor.execute("""
-                UPDATE mac_addresses
-                SET device = %s, interface = %s, last_seen = %s
-                WHERE mac = %s
-            """, (device, interface, now, mac))
-            logger.info(f"[{device}] MAC {mac} moved from {old_device}/{old_if} to {device}/{interface}")
-    else:
-        cursor.execute("""
-            INSERT INTO mac_addresses (mac, device, interface, first_seen, last_seen)
-            VALUES (%s, %s, %s, %s, %s)
-        """, (mac, device, interface, now, now))
-        logger.info(f"[{device}] New MAC {mac} on {interface}")
-
-def process_device(cursor, device_name, ip):
+def process_device(store: MACStorage, device_name, ip):
     logger.info(f"Scanning {device_name} ({ip})")
     try:
         mac_table = get_mac_table(ip)
-        now = datetime.utcnow()
         for mac, interface in mac_table.items():
-            upsert_mac(cursor, mac, device_name, interface, now)
+            store.upsert_mac(mac, device_name, interface)
     except Exception as e:
         logger.exception(f"[{device_name}] Error during processing")
 
 def main():
     logger.info("=== MAC Tracker Run Started ===")
+    store = MACStorage()
     try:
-        conn = psycopg2.connect(**DB_CONFIG)
-        cursor = conn.cursor()
-        ensure_tables(cursor)
-
         devices = nb.dcim.devices.all()
         for device in devices:
             if device.primary_ip4:
                 ip = device.primary_ip4.address.split("/")[0]
-                process_device(cursor, device.name, ip)
-
-        conn.commit()
-        cursor.close()
-        conn.close()
+                process_device(store, device.name, ip)
+        store.commit()
         logger.info("=== MAC Tracker Run Completed ===")
     except Exception as e:
         logger.exception("Fatal error in main")
+    finally:
+        store.close()
 
 if __name__ == "__main__":
     main()
