@@ -16,6 +16,7 @@ The script also logs to `mac_tracker.log` and the following is an example of the
 ```
 
 <br>
+
 The support script, `mac_lookup.py`, will let your query the database for a MAC.  Example:<br>
 **Lookup a full MAC:**
 ```
