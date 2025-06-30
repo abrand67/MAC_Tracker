@@ -50,3 +50,7 @@ From Device    From IF   To Device    To IF     Moved At
 -------------  --------  -----------  --------  -------------------
 switch1        Gi1/0/1   switch1      Gi1/0/2   2025-06-29 13:00:00
 ```
+
+**WIP**<br>
+* multithreading to more efficinetly collect MAC data from larger networks
+* SNMPv3 support
