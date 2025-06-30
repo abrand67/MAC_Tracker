@@ -17,12 +17,35 @@ The script also logs to `mac_tracker.log` and the following is an example of the
 
 
 The support script, `mac_lookup.py`, will let your query the database for a MAC.  Example:<br>
+**Lookup a full MAC:**
 ```
-python3 mac_lookup.py aa:bb:cc:dd:ee:ff
+#python3 mac_lookup.py aa:bb:cc:dd:ee:ff
 
-MAC Address: aa:bb:cc:dd:ee:ff
-Device     : switch1
-Interface  : Gi1/0/3
-First Seen : 2025-06-28 17:02:45
-Last Seen  : 2025-06-30 12:01:00
+Current MAC Info:
+
+MAC                Device    Interface   First Seen          Last Seen
+----------------  --------  -----------  -------------------  -------------------
+aa:bb:cc:dd:ee:ff  switch1   Gi1/0/2      2025-06-28 19:01:00  2025-06-30 13:00:00
+```
+
+ **Lookup a partial MAC:**
+ ```
+#python3 mac_lookup.py aabb
+
+Current MAC Info:
+
+MAC                Device    Interface   First Seen          Last Seen
+----------------  --------  -----------  -------------------  -------------------
+aa:bb:cc:dd:ee:ff  switch1   Gi1/0/2      2025-06-28 19:01:00  2025-06-30 13:00:00
+```
+
+**Show history:**
+```
+#python3 mac_lookup.py aa:bb --history
+
+History for aa:bb:cc:dd:ee:ff:
+
+From Device    From IF   To Device    To IF     Moved At
+-------------  --------  -----------  --------  -------------------
+switch1        Gi1/0/1   switch1      Gi1/0/2   2025-06-29 13:00:00
 ```
