@@ -13,7 +13,6 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 """
-#!/usr/bin/env python3
 import os
 import logging
 import threading
@@ -30,8 +29,16 @@ load_dotenv()
 # Configuration
 NETBOX_URL = os.getenv("NETBOX_URL")
 NETBOX_TOKEN = os.getenv("NETBOX_TOKEN")
-SNMP_COMMUNITY = os.getenv("SNMP_COMMUNITY", "public")
 THREAD_COUNT = int(os.getenv("THREAD_COUNT", 10))
+
+# SNMP Version and Credentials
+SNMP_VERSION = os.getenv("SNMP_VERSION", "v2c").lower()
+SNMP_COMMUNITY = os.getenv("SNMP_COMMUNITY", "public")
+SNMP_V3_USER = os.getenv("SNMP_V3_USER")
+SNMP_V3_AUTH_KEY = os.getenv("SNMP_V3_AUTH_KEY")
+SNMP_V3_AUTH_PROTO = os.getenv("SNMP_V3_AUTH_PROTO", "SHA").upper()
+SNMP_V3_PRIV_KEY = os.getenv("SNMP_V3_PRIV_KEY")
+SNMP_V3_PRIV_PROTO = os.getenv("SNMP_V3_PRIV_PROTO", "AES").upper()
 
 # Logging setup
 log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
@@ -54,11 +61,34 @@ IFINDEX_TO_NAME_OID = '1.3.6.1.2.1.31.1.1.1.1'
 # NetBox API
 nb = pynetbox.api(NETBOX_URL, token=NETBOX_TOKEN)
 
+def get_snmp_auth():
+    if SNMP_VERSION == "v2c":
+        return CommunityData(SNMP_COMMUNITY, mpModel=0)
+    elif SNMP_VERSION == "v3":
+        auth_proto_map = {
+            "SHA": usmHMACSHAAuthProtocol,
+            "MD5": usmHMACMD5AuthProtocol
+        }
+        priv_proto_map = {
+            "AES": usmAesCfb128Protocol,
+            "DES": usmDESPrivProtocol
+        }
+        return UsmUserData(
+            SNMP_V3_USER,
+            SNMP_V3_AUTH_KEY,
+            SNMP_V3_PRIV_KEY,
+            authProtocol=auth_proto_map.get(SNMP_V3_AUTH_PROTO, usmHMACSHAAuthProtocol),
+            privProtocol=priv_proto_map.get(SNMP_V3_PRIV_PROTO, usmAesCfb128Protocol)
+        )
+    else:
+        raise ValueError("Unsupported SNMP_VERSION. Use 'v2c' or 'v3'.")
+
 def snmp_walk(ip, oid):
+    auth = get_snmp_auth()
     try:
         for (errInd, errStat, errIdx, varBinds) in nextCmd(
             SnmpEngine(),
-            CommunityData(SNMP_COMMUNITY, mpModel=0),
+            auth,
             UdpTransportTarget((ip, 161), timeout=2, retries=1),
             ContextData(),
             ObjectType(ObjectIdentity(oid)),
