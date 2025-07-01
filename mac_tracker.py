@@ -13,35 +13,35 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 """
+#!/usr/bin/env python3
 import os
 import logging
+import threading
 import pynetbox
+from queue import Queue
 from datetime import datetime
 from dotenv import load_dotenv
 from logging.handlers import RotatingFileHandler
 from pysnmp.hlapi import *
 from db_backend import MACStorage
 
-# Load environment
 load_dotenv()
 
 # Configuration
 NETBOX_URL = os.getenv("NETBOX_URL")
 NETBOX_TOKEN = os.getenv("NETBOX_TOKEN")
 SNMP_COMMUNITY = os.getenv("SNMP_COMMUNITY", "public")
+THREAD_COUNT = int(os.getenv("THREAD_COUNT", 10))
 
 # Logging setup
 log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("mac_tracker")
 logger.setLevel(logging.INFO)
 
-# File log
-log_file = "mac_tracker.log"
-file_handler = RotatingFileHandler(log_file, maxBytes=5 * 1024 * 1024, backupCount=3)
+file_handler = RotatingFileHandler("mac_tracker.log", maxBytes=5 * 1024 * 1024, backupCount=3)
 file_handler.setFormatter(log_formatter)
 logger.addHandler(file_handler)
 
-# Console log
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(log_formatter)
 logger.addHandler(console_handler)
@@ -51,12 +51,12 @@ BRIDGE_MIB_PORT_OID = '1.3.6.1.2.1.17.4.3.1.2'
 PORT_MAP_OID = '1.3.6.1.2.1.17.1.4.1.2'
 IFINDEX_TO_NAME_OID = '1.3.6.1.2.1.31.1.1.1.1'
 
-# Connect to NetBox
+# NetBox API
 nb = pynetbox.api(NETBOX_URL, token=NETBOX_TOKEN)
 
 def snmp_walk(ip, oid):
     try:
-        for (errorIndication, errorStatus, errorIndex, varBinds) in nextCmd(
+        for (errInd, errStat, errIdx, varBinds) in nextCmd(
             SnmpEngine(),
             CommunityData(SNMP_COMMUNITY, mpModel=0),
             UdpTransportTarget((ip, 161), timeout=2, retries=1),
@@ -64,11 +64,11 @@ def snmp_walk(ip, oid):
             ObjectType(ObjectIdentity(oid)),
             lexicographicMode=False
         ):
-            if errorIndication:
-                logger.warning(f"[{ip}] SNMP error: {errorIndication}")
+            if errInd:
+                logger.warning(f"[{ip}] SNMP error: {errInd}")
                 break
-            elif errorStatus:
-                logger.warning(f"[{ip}] SNMP error: {errorStatus.prettyPrint()} at {errorIndex}")
+            elif errStat:
+                logger.warning(f"[{ip}] SNMP error: {errStat.prettyPrint()} at {errIdx}")
                 break
             else:
                 for varBind in varBinds:
@@ -77,9 +77,7 @@ def snmp_walk(ip, oid):
         logger.error(f"[{ip}] SNMP walk exception: {e}")
 
 def get_mac_table(ip):
-    mac_table = {}
-    port_map = {}
-    ifindex_map = {}
+    mac_table, port_map, ifindex_map = {}, {}, {}
 
     for oid, val in snmp_walk(ip, PORT_MAP_OID):
         bridge_port = int(oid.prettyPrint().split('.')[-1])
@@ -102,24 +100,42 @@ def get_mac_table(ip):
 
     return mac_table
 
-def process_device(store: MACStorage, device_name, ip):
-    logger.info(f"Scanning {device_name} ({ip})")
-    try:
-        mac_table = get_mac_table(ip)
-        for mac, interface in mac_table.items():
-            store.upsert_mac(mac, device_name, interface)
-    except Exception as e:
-        logger.exception(f"[{device_name}] Error during processing")
+def worker(queue, store: MACStorage):
+    while not queue.empty():
+        device, ip = queue.get()
+        try:
+            logger.info(f"[{device}] Starting scan of {ip}")
+            mac_table = get_mac_table(ip)
+            for mac, interface in mac_table.items():
+                store.upsert_mac(mac, device, interface)
+            logger.info(f"[{device}] Completed scan of {ip}")
+        except Exception as e:
+            logger.exception(f"[{device}] Error during processing")
+        finally:
+            queue.task_done()
 
 def main():
     logger.info("=== MAC Tracker Run Started ===")
     store = MACStorage()
     try:
+        q = Queue()
         devices = nb.dcim.devices.all()
-        for device in devices:
-            if device.primary_ip4:
-                ip = device.primary_ip4.address.split("/")[0]
-                process_device(store, device.name, ip)
+        for dev in devices:
+            if dev.primary_ip4:
+                ip = dev.primary_ip4.address.split("/")[0]
+                q.put((dev.name, ip))
+
+        threads = []
+        for _ in range(min(THREAD_COUNT, q.qsize())):
+            t = threading.Thread(target=worker, args=(q, store))
+            t.start()
+            threads.append(t)
+
+        q.join()
+
+        for t in threads:
+            t.join()
+
         store.commit()
         logger.info("=== MAC Tracker Run Completed ===")
     except Exception as e:
