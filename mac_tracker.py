@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 import os
+import sys
 import logging
 import threading
 import pynetbox
@@ -44,6 +45,12 @@ SNMP_V3_PRIV_PROTO = os.getenv("SNMP_V3_PRIV_PROTO", "AES").upper()
 log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("mac_tracker")
 logger.setLevel(logging.INFO)
+def handle_uncaught_exception(exc_type, exc_value, exc_traceback):
+    logger.critical(
+        "uncaught exception, application will terminate.",
+        exc_info=(exc_type, exc_value, exc_traceback),
+    )
+sys.excepthook = handle_uncaught_exception
 
 file_handler = RotatingFileHandler("mac_tracker.log", maxBytes=5 * 1024 * 1024, backupCount=3)
 file_handler.setFormatter(log_formatter)
